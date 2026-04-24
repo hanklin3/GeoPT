@@ -16,6 +16,7 @@ class DrivAerML(object):
         self.ntest = args.ntest
         self.normalize = args.normalize
         self.norm_type = args.norm_type
+        self.device = torch.device(getattr(args, "device", "cpu"))
         # Validate norm_type
         if self.norm_type not in ["UnitTransformer", "UnitGaussianNormalizer"]:
             raise ValueError(
@@ -60,7 +61,7 @@ class DrivAerML(object):
                 self.y_normalizer = UnitGaussianNormalizer(train_y)
 
             train_y = self.y_normalizer.encode(train_y)
-            self.y_normalizer.cuda()
+            self.y_normalizer.to(self.device)
 
         train_loader = torch.utils.data.DataLoader(
             torch.utils.data.TensorDataset(train_pos, train_pos, train_cond, train_y),
@@ -83,6 +84,7 @@ class NASA(object):
         self.ntest = args.ntest
         self.normalize = args.normalize
         self.norm_type = args.norm_type
+        self.device = torch.device(getattr(args, "device", "cpu"))
         self.ntrain = args.ntrain
         self.ntest = args.ntest
         # Validate norm_type
@@ -140,7 +142,7 @@ class NASA(object):
                 self.y_normalizer = UnitGaussianNormalizer(train_y)
 
             train_y = self.y_normalizer.encode(train_y)
-            self.y_normalizer.cuda()
+            self.y_normalizer.to(self.device)
 
         train_loader = torch.utils.data.DataLoader(
             torch.utils.data.TensorDataset(train_pos, train_pos, train_cond, train_y),
@@ -162,6 +164,7 @@ class AirCraft(object):
         self.ntest = args.ntest
         self.normalize = args.normalize
         self.norm_type = args.norm_type
+        self.device = torch.device(getattr(args, "device", "cpu"))
 
         # Validate norm_type
         if self.norm_type not in ["UnitTransformer", "UnitGaussianNormalizer"]:
@@ -206,7 +209,7 @@ class AirCraft(object):
                 self.y_normalizer = UnitGaussianNormalizer(train_y)
 
             train_y = self.y_normalizer.encode(train_y)
-            self.y_normalizer.cuda()
+            self.y_normalizer.to(self.device)
 
         train_loader = torch.utils.data.DataLoader(
             torch.utils.data.TensorDataset(train_pos, train_pos, train_cond, train_y),
@@ -228,6 +231,7 @@ class DTCHull(object):
         self.ntest = args.ntest
         self.normalize = args.normalize
         self.norm_type = args.norm_type
+        self.device = torch.device(getattr(args, "device", "cpu"))
 
         # Validate norm_type
         if self.norm_type not in ["UnitTransformer", "UnitGaussianNormalizer"]:
@@ -276,7 +280,7 @@ class DTCHull(object):
                 self.y_normalizer = UnitGaussianNormalizer(train_y)
 
             train_y = self.y_normalizer.encode(train_y)
-            self.y_normalizer.cuda()
+            self.y_normalizer.to(self.device)
 
         train_loader = torch.utils.data.DataLoader(
             torch.utils.data.TensorDataset(train_pos, train_pos, train_cond, train_y),
@@ -298,6 +302,7 @@ class Car_Crash(object):
         self.ntest = args.ntest
         self.normalize = args.normalize
         self.norm_type = args.norm_type
+        self.device = torch.device(getattr(args, "device", "cpu"))
 
         # Validate norm_type
         if self.norm_type not in ["UnitTransformer", "UnitGaussianNormalizer"]:
@@ -342,7 +347,7 @@ class Car_Crash(object):
                 self.y_normalizer = UnitGaussianNormalizer(train_y)
 
             train_y = self.y_normalizer.encode(train_y)
-            self.y_normalizer.cuda()
+            self.y_normalizer.to(self.device)
             print(self.y_normalizer.mean)
             print(self.y_normalizer.std)
 

@@ -1,8 +1,10 @@
 import os
 import argparse
+import time
 import matplotlib.pyplot as plt
 import numpy as np
 from tqdm import *
+import torch
 
 parser = argparse.ArgumentParser('Fine-Tuning Neural Simulators')
 
@@ -65,7 +67,32 @@ parser.add_argument('--finetune_name', type=str, default='Transolver_check', hel
 args = parser.parse_args()
 eval = args.eval
 save_name = args.save_name
-os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+
+
+def resolve_device(parsed_args):
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    if torch.cuda.is_available():
+        os.environ["CUDA_VISIBLE_DEVICES"] = parsed_args.gpu
+        return "cuda"
+    return "cpu"
+
+
+args.device = resolve_device(args)
+print(f"Using device: {args.device}")
+
+
+def sync_device(device):
+    if device == "cuda" and torch.cuda.is_available():
+        torch.cuda.synchronize()
+    elif device == "mps" and hasattr(torch, "mps") and hasattr(torch.mps, "synchronize"):
+        torch.mps.synchronize()
+
+
+def format_duration(seconds):
+    mins, secs = divmod(seconds, 60)
+    hours, mins = divmod(mins, 60)
+    return f"{int(hours):02d}:{int(mins):02d}:{secs:06.3f}"
 
 
 def main():
@@ -83,7 +110,12 @@ def main():
         exp.test()
         exp.test_full_mesh()
     else:
+        sync_device(args.device)
+        train_start = time.perf_counter()
         exp.train()
+        sync_device(args.device)
+        train_elapsed = time.perf_counter() - train_start
+        print(f"Training time (hh:mm:ss.sss): {format_duration(train_elapsed)}")
         exp.test()
         exp.test_full_mesh()
 

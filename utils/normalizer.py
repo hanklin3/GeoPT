@@ -13,8 +13,11 @@ class IdentityTransformer():
         return self
 
     def cuda(self):
-        self.mean = self.mean.cuda()
-        self.std = self.std.cuda()
+        if torch.cuda.is_available():
+            return self.to("cuda")
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return self.to("mps")
+        return self.to("cpu")
 
     def cpu(self):
         self.mean = self.mean.cpu()
@@ -38,8 +41,11 @@ class UnitTransformer():
         return self
 
     def cuda(self):
-        self.mean = self.mean.cuda()
-        self.std = self.std.cuda()
+        if torch.cuda.is_available():
+            return self.to("cuda")
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return self.to("mps")
+        return self.to("cpu")
 
     def cpu(self):
         self.mean = self.mean.cpu()
@@ -106,8 +112,11 @@ class UnitGaussianNormalizer(object):
         return self
 
     def cuda(self):
-        self.mean = self.mean.cuda()
-        self.std = self.std.cuda()
+        if torch.cuda.is_available():
+            return self.to("cuda")
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return self.to("mps")
+        return self.to("cpu")
 
     def cpu(self):
         self.mean = self.mean.cpu()

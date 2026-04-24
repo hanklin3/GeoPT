@@ -18,7 +18,8 @@ class Exp_Basic(object):
     def __init__(self, args):
         self.dataset, self.train_loader, self.test_loader, args.shapelist = get_data(args)
         _, _, self.test_loader_full, _ = get_data(args, full_mesh=True)
-        self.model = get_model(args).cuda()
+        self.device = torch.device(getattr(args, "device", "cpu"))
+        self.model = get_model(args).to(self.device)
         self.args = args
         print(self.args)
         print(self.model)
