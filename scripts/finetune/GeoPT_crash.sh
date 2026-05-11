@@ -1,5 +1,6 @@
-python run.py \
---gpu 0 \
+torchrun --nproc_per_node=2 run.py \
+--gpu 0,1 \
+--use_fsdp 1 \
 --data_path ./car_crash_npys \
 --loader Car_Crash \
 --task GeoPT_finetune \

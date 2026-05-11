@@ -1,0 +1,23 @@
+python run.py \
+--gpu 0 \
+--data_path ./reynolds_cavitation_2d_preview_vel \
+--loader ReynoldsCavitation2D \
+--task steady_cond \
+--dynamics reynolds_cavitation \
+--geotype unstructured \
+--space_dim 3 \
+--fun_dim 6 \
+--out_dim 5 \
+--normalize 1 \
+--model Transolver \
+--n_hidden 128 \
+--n_heads 4 \
+--n_layers 3 \
+--mlp_ratio 2 \
+--slice_num 32 \
+--ntrain 2 \
+--ntest 1 \
+--batch-size 1 \
+--epochs 1 \
+--eval 0 \
+--save_name reynolds_cavitation_2d_preview_vel_transolver

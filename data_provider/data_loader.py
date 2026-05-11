@@ -356,3 +356,85 @@ class Car_Crash(object):
             shuffle=False)
         print("Dataloading is over.")
         return train_loader, test_loader, [train_y.shape[1]]
+
+
+class ReynoldsCavitation(object):
+    def __init__(self, args):
+        self.data_path = args.data_path
+        self.batch_size = args.batch_size
+        self.ntrain = args.ntrain
+        self.ntest = args.ntest
+        self.normalize = args.normalize
+        self.norm_type = args.norm_type
+
+        if self.norm_type not in ["UnitTransformer", "UnitGaussianNormalizer"]:
+            raise ValueError(
+                f"Unsupported norm_type: {self.norm_type}. Must be 'UnitTransformer' or 'UnitGaussianNormalizer'.")
+
+    def _load_split(self, split, count, full_mesh=False):
+        data_pos = []
+        data_fx = []
+        data_y = []
+        data_cond = []
+        rng = np.random.default_rng(seed=0)
+
+        split_dir = os.path.join(self.data_path, split)
+        for i in range(count):
+            x = np.load(os.path.join(split_dir, f"x_{i + 1}.npy"))
+            y = np.load(os.path.join(split_dir, f"y_{i + 1}.npy"))
+            cond = np.load(os.path.join(split_dir, f"cond_{i + 1}.npy"))
+
+            if not full_mesh and x.shape[0] > 2048:
+                idx = rng.choice(x.shape[0], size=2048, replace=False)
+                x = x[idx, :]
+                y = y[idx, :]
+
+            # If generator saved an extra column (e.g., u_node), split it into fx.
+            if x.shape[1] > 3:
+                pos = x[:, :3]
+                fx = x[:, 3:]
+            else:
+                pos = x
+                fx = np.zeros((x.shape[0], 0), dtype=x.dtype)
+
+            data_pos.append(pos)
+            data_fx.append(fx)
+            data_y.append(y)
+            data_cond.append(cond)
+
+        pos = torch.tensor(np.array(data_pos), dtype=torch.float)
+        fx = torch.tensor(np.array(data_fx), dtype=torch.float)
+        y = torch.tensor(np.array(data_y), dtype=torch.float)
+        cond = torch.tensor(np.array(data_cond), dtype=torch.float)[:, None, :]
+        return pos, fx, y, cond
+
+    def get_loader(self, full_mesh=False):
+        print("loading Reynolds cavitation dataset...")
+        train_pos, train_fx, train_y, train_cond = self._load_split("train", self.ntrain, full_mesh=full_mesh)
+        test_pos, test_fx, test_y, test_cond = self._load_split("test", self.ntest, full_mesh=full_mesh)
+
+        print(train_pos.shape, train_fx.shape, train_y.shape, train_cond.shape, test_pos.shape, test_fx.shape, test_y.shape, test_cond.shape)
+
+        if self.normalize:
+            if self.norm_type == 'UnitTransformer':
+                self.y_normalizer = UnitTransformer(train_y)
+            elif self.norm_type == 'UnitGaussianNormalizer':
+                self.y_normalizer = UnitGaussianNormalizer(train_y)
+
+            train_y = self.y_normalizer.encode(train_y)
+            self.y_normalizer.cuda()
+
+        train_loader = torch.utils.data.DataLoader(
+            torch.utils.data.TensorDataset(train_pos, train_fx, train_cond, train_y),
+            batch_size=self.batch_size,
+            shuffle=True)
+        test_loader = torch.utils.data.DataLoader(
+            torch.utils.data.TensorDataset(test_pos, test_fx, test_cond, test_y),
+            batch_size=self.batch_size,
+            shuffle=False)
+        print("Dataloading is over.")
+        return train_loader, test_loader, [train_y.shape[1]]
+
+
+PoiseuilleMultiphase = ReynoldsCavitation
+ReynoldsCavitation2D = ReynoldsCavitation

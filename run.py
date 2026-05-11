@@ -1,6 +1,12 @@
 import os
 import argparse
-import matplotlib.pyplot as plt
+import time
+from datetime import timedelta
+import torch
+try:
+    import matplotlib.pyplot as plt
+except Exception:
+    plt = None
 import numpy as np
 from tqdm import *
 
@@ -38,7 +44,7 @@ parser.add_argument('--out_dim', type=int, default=1, help='output observation d
 parser.add_argument('--task', type=str, default='steady',
                     help='select from [steady, GeoPT_finetune]')
 parser.add_argument('--dynamics', type=str, default='hull',
-                    help='select from [hull, craft, drivAerml, nasa, crash]')
+                    help='select from [hull, craft, drivAerml, nasa, crash, reynolds_cavitation, poiseuille]')
 ## models
 parser.add_argument('--model', type=str, default='Transolver')
 parser.add_argument('--n_hidden', type=int, default=64, help='hidden dim')
@@ -61,6 +67,14 @@ parser.add_argument('--vis_bound', type=int, nargs='+', default=None, help='size
 ## finetune
 parser.add_argument('--finetune', type=int, default=0, help='finetune or not')
 parser.add_argument('--finetune_name', type=str, default='Transolver_check', help='name of folders')
+parser.add_argument('--use_fsdp', type=int, default=0, help='enable FSDP training with torchrun')
+parser.add_argument('--fsdp_mixed_precision', type=str, default='none', help='FSDP mixed precision: [none, fp16, bf16]')
+parser.add_argument('--fsdp_cpu_offload', type=int, default=0, help='enable FSDP CPU offload for parameters')
+parser.add_argument('--fsdp_sharding_strategy', type=str, default='full_shard', help='FSDP sharding: [full_shard, shard_grad_op, no_shard]')
+parser.add_argument('--fsdp_min_params', type=int, default=0, help='auto-wrap min params; 0 disables auto-wrap')
+parser.add_argument('--fsdp_limit_all_gathers', type=int, default=1, help='limit all-gather overlap to reduce memory peaks')
+parser.add_argument('--fsdp_backward_prefetch', type=str, default='pre', help='FSDP backward prefetch: [pre, post, none]')
+parser.add_argument('--memory_report_interval', type=int, default=0, help='print GPU memory every N epochs; 0 disables periodic reporting')
 
 args = parser.parse_args()
 eval = args.eval
@@ -79,13 +93,38 @@ def main():
     else:
         raise ValueError('task not supported')
 
-    if eval:
-        exp.test()
-        exp.test_full_mesh()
-    else:
-        exp.train()
-        exp.test()
-        exp.test_full_mesh()
+    try:
+        if eval:
+            if getattr(exp, 'is_main_process', True):
+                print("Eval mode: running subsampled test first, then full-mesh test.")
+                print("Starting eval pass: test")
+            exp.test()
+            if getattr(exp, 'is_main_process', True):
+                print("Starting eval pass: test_full_mesh")
+            exp.test_full_mesh()
+        else:
+            if hasattr(exp, 'report_gpu_memory') and args.memory_report_interval >= 0:
+                exp.report_gpu_memory('before_train')
+            if hasattr(exp, 'device') and exp.device.type == 'cuda':
+                torch.cuda.synchronize(exp.device)
+            train_start = time.perf_counter()
+            exp.train()
+            if hasattr(exp, 'device') and exp.device.type == 'cuda':
+                torch.cuda.synchronize(exp.device)
+            if hasattr(exp, 'report_gpu_memory') and args.memory_report_interval >= 0:
+                exp.report_gpu_memory('after_train')
+            train_elapsed_seconds = time.perf_counter() - train_start
+            if getattr(exp, 'is_main_process', True):
+                print(f"Total training time: {timedelta(seconds=int(train_elapsed_seconds))} ({train_elapsed_seconds:.2f} seconds)")
+                print("Post-training eval: running subsampled test first, then full-mesh test.")
+                print("Starting eval pass: test")
+            exp.test()
+            if getattr(exp, 'is_main_process', True):
+                print("Starting eval pass: test_full_mesh")
+            exp.test_full_mesh()
+    finally:
+        if hasattr(exp, 'finalize'):
+            exp.finalize()
 
 if __name__ == "__main__":
     main()

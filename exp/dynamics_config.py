@@ -93,6 +93,29 @@ def _direction_drivAerML(x: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
     return torch.cat([vx, vy, vz, w], dim=-1).to(dtype)
 
 
+def _direction_reynolds_cavitation(x: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
+    # cond: (b,1,5) -> [surface_flag, top_wall_speed, viscosity, pore_amp, cavitation_number]
+    b, n, _ = x.shape
+    device, dtype = x.device, x.dtype
+
+    surface_flag = cond[:, :, 0:1]
+    wall_speed = cond[:, :, 1:2]
+    viscosity = cond[:, :, 2:3]
+    constriction = cond[:, :, 3:4]
+    cavitation_number = cond[:, :, 4:5]
+
+    vx = torch.ones(b, n, 1, device=device, dtype=dtype)
+    vy = torch.zeros(b, n, 1, device=device, dtype=dtype)
+    vz = torch.zeros(b, n, 1, device=device, dtype=dtype)
+
+    speed_term = wall_speed.repeat(1, n, 1)
+    film_term = (constriction / (viscosity + 1e-6)).repeat(1, n, 1)
+    cavitation_term = cavitation_number.repeat(1, n, 1)
+    surface_term = surface_flag.repeat(1, n, 1)
+
+    return torch.cat([vx, speed_term, film_term, cavitation_term + surface_term], dim=-1).to(dtype)
+
+
 # -------- registry --------
 _REGISTRY: Dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = {
     "craft": _direction_craft,
@@ -100,6 +123,8 @@ _REGISTRY: Dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = {
     "crash": _direction_crash,
     "hull": _direction_hull,
     "drivAerML": _direction_drivAerML,
+    "reynolds_cavitation": _direction_reynolds_cavitation,
+    "poiseuille": _direction_reynolds_cavitation,
 }
 
 _ALIASES: Dict[str, str] = {
@@ -108,6 +133,11 @@ _ALIASES: Dict[str, str] = {
     "Hull": "hull",
     "Car": "drivAerML",
     "drivAerml": "drivAerML",
+    "ReynoldsCavitation": "reynolds_cavitation",
+    "PoiseuilleMultiphase": "poiseuille",
+    "poiseuille_multiphase": "poiseuille",
+    "reynolds": "reynolds_cavitation",
+    "cavitation": "reynolds_cavitation",
 }
 
 

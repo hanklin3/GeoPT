@@ -1,0 +1,32 @@
+rel_err:0.17994828422864279
+final save models
+final training logs
+Total training time: 2:01:11 (7271.27 seconds)
+visual:  1
+visual:  2
+visual:  3
+visual:  4
+visual:  5
+visual:  6
+visual:  7
+visual:  8
+visual:  9
+test rel_err:0.17994828422864279
+test mse:281.6509821573893
+test mae:10.968409109115601
+test rel_err split:tensor([inf], device='cuda:0')
+test rel_err split max:tensor([inf], device='cuda:0')
+visual:  1
+visual:  2
+visual:  3
+visual:  4
+visual:  5
+visual:  6
+visual:  7
+visual:  8
+visual:  9
+test rel_err:0.17823201715946196
+test mse:276.3927907307943
+test mae:10.864839394887289
+test rel_err split:tensor([inf], device='cuda:0')
+test rel_err split max:tensor([inf], device='cuda:0')

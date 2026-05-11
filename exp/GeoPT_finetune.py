@@ -28,7 +28,10 @@ class Exp_Steady(Exp_Basic):
         rel_err = 0.0
         with torch.no_grad():
             for pos, fx, cond, y in self.test_loader:
-                x, fx, cond, y = pos.cuda(), fx.cuda(), cond.cuda(), y.cuda()
+                x = pos.to(self.device)
+                fx = fx.to(self.device)
+                cond = cond.to(self.device)
+                y = y.to(self.device)
                 v = self.direction(x, cond)
                 fx = torch.cat((fx, v), dim=-1)
                 if self.args.fun_dim == 0:
@@ -46,6 +49,11 @@ class Exp_Steady(Exp_Basic):
     def load_pretrained_with_filter(self, model, pretrained_path, exclude_layers=None, map_location="cpu"):
         if exclude_layers is None:
             exclude_layers = ("mlp2", "ln_3")  # exclude last layer
+
+        if self.use_fsdp:
+            if self.is_main_process:
+                print("[Pretrain] Skipping partial layer-loading under FSDP. Start from random init or pre-convert checkpoint.")
+            return model
 
         pretrained = torch.load(pretrained_path, map_location=map_location)
         model_state = model.state_dict()
@@ -91,12 +99,16 @@ class Exp_Steady(Exp_Basic):
         test_loss_list = []
 
         for ep in range(self.args.epochs):
+            self.set_epoch(ep)
 
             self.model.train()
             train_loss = 0
 
             for pos, fx, cond, y in self.train_loader:
-                x, fx, cond, y = pos.cuda(), fx.cuda(), cond.cuda(), y.cuda()
+                x = pos.to(self.device)
+                fx = fx.to(self.device)
+                cond = cond.to(self.device)
+                y = y.to(self.device)
                 v = self.direction(x, cond)
                 fx = torch.cat((fx, v), dim=-1)
                 if self.args.fun_dim == 0:
@@ -120,21 +132,25 @@ class Exp_Steady(Exp_Basic):
             if self.args.scheduler == 'CosineAnnealingLR' or self.args.scheduler == 'StepLR':
                 scheduler.step()
 
+            if self.args.memory_report_interval > 0 and (ep % self.args.memory_report_interval == 0):
+                self.report_gpu_memory(tag=f'epoch_{ep}')
+
             train_loss = train_loss / self.args.ntrain
-            print("Epoch {} Train loss : {:.5f}".format(ep, train_loss))
+            if self.is_main_process:
+                print("Epoch {} Train loss : {:.5f}".format(ep, train_loss))
             train_loss_list.append(train_loss)
 
             rel_err = self.vali()
-            print("rel_err:{}".format(rel_err))
+            if self.is_main_process:
+                print("rel_err:{}".format(rel_err))
             test_loss_list.append(rel_err)
 
-            if ep % 100 == 0:
-                if not os.path.exists('./checkpoints'):
-                    os.makedirs('./checkpoints')
+            if ep % 100 == 0 and self.is_main_process:
                 print('save models')
-                torch.save(self.model.state_dict(), os.path.join('./checkpoints', self.args.save_name + '.pt'))
+            if ep % 100 == 0:
+                self.save_checkpoint(os.path.join('./checkpoints', self.args.save_name + '.pt'))
 
-            if ep % 10 == 0:
+            if ep % 10 == 0 and self.is_main_process:
                 if not os.path.exists('./training_logs'):
                     os.makedirs('./training_logs')
                 print('save logs')
@@ -143,18 +159,20 @@ class Exp_Steady(Exp_Basic):
                 np.save(os.path.join('./training_logs', self.args.save_name + '_test_loss.npy'),
                         np.array(test_loss_list))
 
-        if not os.path.exists('./checkpoints'):
-            os.makedirs('./checkpoints')
-        print('final save models')
-        torch.save(self.model.state_dict(), os.path.join('./checkpoints', self.args.save_name + '.pt'))
-        if not os.path.exists('./training_logs'):
-            os.makedirs('./training_logs')
-        print('final training logs')
-        np.save(os.path.join('./training_logs', self.args.save_name + '_train_loss.npy'), np.array(train_loss_list))
-        np.save(os.path.join('./training_logs', self.args.save_name + '_test_loss.npy'), np.array(test_loss_list))
+        if self.is_main_process:
+            print('final save models')
+        self.save_checkpoint(os.path.join('./checkpoints', self.args.save_name + '.pt'))
+        if self.is_main_process:
+            if not os.path.exists('./training_logs'):
+                os.makedirs('./training_logs')
+            print('final training logs')
+            np.save(os.path.join('./training_logs', self.args.save_name + '_train_loss.npy'), np.array(train_loss_list))
+            np.save(os.path.join('./training_logs', self.args.save_name + '_test_loss.npy'), np.array(test_loss_list))
 
     def test(self):
-        self.model.load_state_dict(torch.load("./checkpoints/" + self.args.save_name + ".pt"))
+        self.load_checkpoint("./checkpoints/" + self.args.save_name + ".pt")
+        if not self.is_main_process:
+            return
         self.model.eval()
         if not os.path.exists('./results/' + self.args.save_name + '/'):
             os.makedirs('./results/' + self.args.save_name + '/')
@@ -170,7 +188,10 @@ class Exp_Steady(Exp_Basic):
         with torch.no_grad():
             for pos, fx, cond, y in self.test_loader:
                 id += 1
-                x, fx, cond, y = pos.cuda(), fx.cuda(), cond.cuda(), y.cuda()
+                x = pos.to(self.device)
+                fx = fx.to(self.device)
+                cond = cond.to(self.device)
+                y = y.to(self.device)
                 v = self.direction(x, cond)
                 fx = torch.cat((fx, v), dim=-1)
                 if self.args.fun_dim == 0:
@@ -200,7 +221,9 @@ class Exp_Steady(Exp_Basic):
         print("test rel_err split max:{}".format(rel_err_split_max))
 
     def test_full_mesh(self):
-        self.model.load_state_dict(torch.load("./checkpoints/" + self.args.save_name + ".pt"))
+        self.load_checkpoint("./checkpoints/" + self.args.save_name + ".pt")
+        if not self.is_main_process:
+            return
         self.model.eval()
         if not os.path.exists('./results/' + self.args.save_name + '/'):
             os.makedirs('./results/' + self.args.save_name + '/')
@@ -216,7 +239,10 @@ class Exp_Steady(Exp_Basic):
         with torch.no_grad():
             for pos, fx, cond, y in self.test_loader_full:
                 id += 1
-                x, fx, cond, y = pos.cuda(), fx.cuda(), cond.cuda(), y.cuda()
+                x = pos.to(self.device)
+                fx = fx.to(self.device)
+                cond = cond.to(self.device)
+                y = y.to(self.device)
                 v = self.direction(x, cond)
                 fx = torch.cat((fx, v), dim=-1)
                 if self.args.fun_dim == 0:
