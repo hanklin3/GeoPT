@@ -87,10 +87,10 @@ $$
 \mathbf{y} = [u, v, p, \alpha_v, \rho].
 $$
 
-Here, `x` is the per-node input coordinate and `y` is the per-node target field that GeoPT learns to predict:
+Here, `x` is the per-node input coordinate and `y` is the per-node target field that GeoPT learns to predict. Be careful with the notation: coordinate `y` is a spatial direction, while bold target `\mathbf{y}` is the machine-learning output vector.
 
 - `x`: sliding-direction coordinate.
-- `y`: transverse in-plane coordinate.
+- `y`: transverse in-plane coordinate, analogous to the circumferential direction in the paper-style plots.
 - `z`: wall-normal coordinate inside the local film gap.
 - `u`: velocity component in the sliding `x` direction.
 - `v`: velocity component in the transverse `y` direction.
@@ -98,11 +98,108 @@ Here, `x` is the per-node input coordinate and `y` is the per-node target field 
 - `alpha_v`: vapor fraction, where `0` is liquid, `1` is vapor, and intermediate values represent a liquid-vapor mixture.
 - `rho`: mixture density computed from the vapor fraction.
 
+Together, the position `[x,y,z]` and predicted velocity `[u,v]` define a local in-plane flow vector anchored at that 3D point:
+
+$$
+\mathbf{r}_i = [x_i,y_i,z_i], \qquad \mathbf{q}_i = [u_i,v_i].
+$$
+
+The generator computes these velocity components after solving pressure on the $x$-$y$ footprint. Pressure gradients are computed as:
+
+```python
+dpdx = np.gradient(p, x, axis=0)
+dpdy = np.gradient(p, y, axis=1)
+```
+
+The in-film velocity field is then reconstructed with a thin-film Couette plus pressure-driven Poiseuille form:
+
+```python
+u = wall_speed_x * eta - (dpdx / (2 * mu)) * dd * (h - dd)
+v = wall_speed_y * eta - (dpdy / (2 * mu)) * dd * (h - dd)
+```
+
+Each velocity component therefore has two parts:
+
+```text
+wall-driven flow + pressure-gradient-driven flow
+```
+
+For `top_down_flow_*.png`, arrows are drawn over the $x$-$y$ footprint using:
+
+```text
+drawn flow vector = [u, v]
+arrow color       = alpha_v
+background color  = speed
+```
+
+For side-view `flow_*.png`, the generator takes a middle `y` slice and draws:
+
+```text
+horizontal arrow component = u
+vertical arrow component   = w_side
+arrow color                = alpha_v
+background color           = speed
+```
+
+Here `w_side` is only a visualization proxy for wall-normal motion. It is not saved as a target channel and GeoPT does not learn it. The proxy is computed from the local gap slope:
+
+```python
+w_side = -0.08 * wall_speed_x * dhdx * eta * (1 - eta)
+```
+
+So in the saved data:
+
+```text
+saved velocity target = [u, v]
+```
+
+In side-view plots:
+
+```text
+drawn flow vector = [u, w_side]
+```
+
+And in top-down plots:
+
+```text
+drawn flow vector = [u, v]
+```
+
+The actual learned flow is the in-plane 3D-field velocity components `u` and `v`; the wall-normal arrow in side plots is just for visual intuition.
+
 The sample-level condition vector saved in `cond_*.npy` is `[surface_flag, wall_speed_x, viscosity, amplitude, cavitation_number]`. During training this vector is repeated at every point and concatenated to the model input, so GeoPT learns:
 
 $$
 [x,y,z] + \mathrm{cond} \rightarrow [u,v,p,\alpha_v,\rho].
 $$
+
+**How GeoPT sees each 3D point**
+
+For this dataset, `fx` is not velocity. The `ReynoldsCavitation3D` loader returns an empty per-point feature tensor:
+
+```text
+fx shape = [batch, points, 0]
+```
+
+During `steady_cond` training, the global condition vector is repeated at every point and concatenated into `fx`. Therefore each node passed into the model is effectively:
+
+```text
+model input per point = [x, y, z] + [surface_flag, wall_speed_x, viscosity, amplitude, cavitation_number]
+```
+
+This gives `3 + 5 = 8` input channels per point. GeoPT/Transolver then predicts:
+
+```text
+model output per point = [u_hat, v_hat, p_hat, alpha_v_hat, rho_hat]
+```
+
+Training compares this prediction `out` with the generated target `y` using relative L2 loss:
+
+$$
+\mathcal{L} = \frac{\|\hat{\mathbf{y}}-\mathbf{y}\|_2}{\|\mathbf{y}\|_2}.
+$$
+
+So GeoPT is learning a supervised mapping from a 3D location plus sample-level operating conditions to the local Reynolds cavitation field. The model is not solving the Reynolds equation directly during this supervised run; the Reynolds generator produces the labels first, and GeoPT learns to approximate that generated field.
 
 Generate the 3D preview dataset with:
 
@@ -133,10 +230,10 @@ The preview writes `x_*.npy`, `y_*.npy`, and `cond_*.npy` under `data/reynolds_c
 The generator steps are:
 
 1. Build a lower textured wall and a moving upper wall. `--geometry flat` makes a constant gap; `--geometry wavy` adds sinusoidal roughness, random pores, and a deep upper-wall bowl/throat with a `0.030` minimum-gap floor.
-2. Solve a density-aware Reynolds equation on the $x$-$y$ surface patch by fixed-point iteration: pressure updates use the current mixture density, then cavitation updates the density.
+2. Solve a density-aware thin-film Reynolds equation over the $x$-$y$ footprint by fixed-point iteration: pressure updates use the current mixture density, then cavitation updates the density.
 3. Clip pressure to the vapor floor, reconstruct velocity/vapor/density fields through film thickness, and export the 3D point cloud.
 
-In other words, `y_*.npy` is computed by first solving for a 2D contact-plane pressure field `p_raw(x,y)`, then converting that pressure solution into cavitation, density, and velocity fields through the local film thickness. The final exported target at each 3D point is:
+In other words, `y_*.npy` is computed by first solving for a thin-film pressure field `p_raw(x,y)` on the surface footprint, then converting that pressure solution into cavitation, density, and velocity fields through the local film thickness. The final exported target at each 3D point is:
 
 $$
 y_i = [u_i, v_i, p_i, \alpha_{v,i}, \rho_i].
@@ -154,12 +251,20 @@ $$
 h(x,y) = z_t(x,y) - z_b(x,y).
 $$
 
-The pressure solve uses a density-aware Reynolds balance on the $x$-$y$ plane:
+The 3D point coordinates are obtained by moving through the local film gap with normalized wall-normal coordinate $\eta \in [0,1]$:
+
+$$
+z(x,y,\eta) = z_b(x,y) + \eta h(x,y).
+$$
+
+The pressure solve uses a density-aware thin-film Reynolds balance over the $x$-$y$ footprint:
 
 $$
 \nabla \cdot \left(\frac{\rho h^3}{12\mu}\nabla p\right)
 - \frac{1}{2}\left(U_x\frac{\partial(\rho h)}{\partial x} + U_y\frac{\partial(\rho h)}{\partial y}\right)=0
 $$
+
+Here $\nabla = [\partial/\partial x,\partial/\partial y]$ is the in-plane gradient. This is the standard thin-film reduction: pressure is solved over the surface footprint, while the exported dataset is 3D because each $(x,y)$ location is sampled through the wall-normal coordinate $z$.
 
 The cavitation update uses the raw pressure before clipping:
 
@@ -187,38 +292,25 @@ $$
 v(x,y,\eta)=U_y\eta - \frac{1}{2\mu}\frac{\partial p}{\partial y}h^2\eta(1-\eta)
 $$
 
-The volumetric vapor field is a wall-normal shaping of the contact-plane vapor fraction:
+The volumetric vapor field is a wall-normal shaping of the footprint vapor fraction:
 
 $$
 \alpha_v(x,y,\eta)=\alpha_v(x,y)\left(0.22+0.78\exp\left[-\frac{1}{2}\left(\frac{\eta-\eta_c}{\sigma_\eta}\right)^2\right] + \alpha_{wall}(\eta)\right)
 $$
 
-where `eta_c` and `sigma_eta` vary by sample and `alpha_wall` adds a small near-wall/top-wall nucleation term. The surface-patch `alpha_v(x,y)` combines the pressure-floor cavitation signal with a paper-style connected leaf lobe seeded downstream of the local minimum gap: the lobe starts at a narrow throat, widens downstream, and tapers before the outlet while the pressure field is clipped inside it and reinforced by an upstream pressure ridge. The exported pressure is repeated through the film and lightly reduced by local speed before applying the same vapor floor. The sample condition vector is `[surface_flag, wall_speed_x, viscosity, amplitude, cavitation_number]`.
+where `eta_c` and `sigma_eta` vary by sample and `alpha_wall` adds a small near-wall/top-wall nucleation term. The footprint vapor field `alpha_v(x,y)` combines the pressure-floor cavitation signal with a paper-style connected leaf lobe seeded downstream of the local minimum gap: the lobe starts at a narrow throat, widens downstream, and tapers before the outlet while the pressure field is clipped inside it and reinforced by an upstream pressure ridge. The exported pressure is repeated through the film and lightly reduced by local speed before applying the same vapor floor. The sample condition vector is `[surface_flag, wall_speed_x, viscosity, amplitude, cavitation_number]`.
 
 **Reynolds 3D Data Generation — Description & Assumptions**
 
-- **Description:** The 3D generator builds a normalized thin-film volume over an $x$-$y$ surface patch. The lower wall is either flat or roughened with sinusoidal texture and pore-like depressions. The upper moving wall protrudes downward with a deep asymmetric bowl and throat, leaving local gaps as small as `0.030` and commonly below `0.10`. A density-aware Reynolds solve runs on the $x$-$y$ patch to produce `p_raw(x,y)`, then pressure is clipped at vapor pressure and reconstructed through the local film coordinate `eta`. The exported point cloud uses physical wall-normal coordinates `x = [x,y,z]`, and the targets are `[u, v, p, alpha_v, rho]`. The volumetric vapor fraction is shaped through the film thickness so the flow-vector plots show different vapor-color patterns across samples.
+- **Description:** The 3D generator builds a normalized thin-film volume over an $x$-$y$ footprint. The lower wall is either flat or roughened with sinusoidal texture and pore-like depressions. The upper moving wall protrudes downward with a deep asymmetric bowl and throat, leaving local gaps as small as `0.030` and commonly below `0.10`. A density-aware thin-film Reynolds solve produces `p_raw(x,y)`, then pressure is clipped at vapor pressure and reconstructed through the local film coordinate `eta`. The exported point cloud uses physical wall-normal coordinates `x = [x,y,z]`, and the targets are `[u, v, p, alpha_v, rho]`. The volumetric vapor fraction is shaped through the film thickness so the flow-vector plots show different vapor-color patterns across samples.
 
 - **Key assumptions:**
   - The domain is normalized and unitless; the generator is a controlled synthetic benchmark, not a dimensional bearing or seal simulator.
   - Thin-film lubrication physics dominates: inertia, turbulence, heat transfer, compressibility waves, and surface tension are not modeled explicitly.
-  - Pressure is solved on the $x$-$y$ surface patch, then velocity and vapor fields are reconstructed through thickness using analytic thin-film profiles.
+  - Pressure is solved over the $x$-$y$ footprint, then velocity and vapor fields are reconstructed through thickness using analytic thin-film profiles.
   - Cavitation uses a pressure floor and a smooth sigmoid vapor transition; it is a surrogate for vapor-pocket formation rather than a full free-boundary solve.
   - Mixture density is a simple liquid-vapor blend controlled by `alpha_v`.
   - `--geometry wavy` is the stress-test case with rough lower wall, deep upper-wall intrusion, transverse wall-speed variation, and nonzero vapor pockets. `--geometry flat` is a control case with constant gap and weaker cavitation structure.
-
-**Legacy 1D/2D Reynolds Commands**
-
-Older Reynolds generators are still available for comparison and debugging, but they are no longer the main dataset description in this README:
-
-```bash
-bash ./scripts/synthetic/preview_reynolds_cavitation.sh
-bash ./scripts/synthetic/preview_reynolds_cavitation_2d.sh
-bash ./scripts/synthetic/generate_reynolds_cavitation_2d.sh
-python ./run.py --task steady_cond --loader ReynoldsCavitation2D --dynamics reynolds_cavitation --data_path ./data/reynolds_cavitation_2d_npys --space_dim 3 --fun_dim 7 --out_dim 5 --geotype unstructured
-```
-
-Use those commands only when you specifically want the earlier lower-dimensional Reynolds surrogates for comparison. For the current 3D Reynolds work, use `preview_reynolds_cavitation_3d.sh` for quick inspection or `generate_reynolds_cavitation_3d.sh` for the full train/test dataset.
 
 **Does This Address Full 3D Liquid-Vapor Interface Modeling?**
 
@@ -228,7 +320,7 @@ What the current setup can test is whether GeoPT can learn a structured 3D surro
 
 **Can GeoPT Learn Without Real CFD Data?**
 
-GeoPT is learning on 3D point clouds: for the 3D Reynolds dataset generated here, each node is positioned with `x = [x,y,z]`, and the model predicts fields at those 3D points. The dataset is genuinely volumetric as an input/output learning problem. However, the labels are generated from a Reynolds equation solved on the $x$-$y$ surface patch and then reconstructed through film thickness, so the physics source is still a thin-film surface solve. In this supervised setting GeoPT learns a 3D representation of our Reynolds-generated data, not a fully resolved 3D liquid-vapor interface from first principles.
+GeoPT is learning on 3D point clouds: for the 3D Reynolds dataset generated here, each node is positioned with `x = [x,y,z]`, and the model predicts fields at those 3D points. The dataset is genuinely volumetric as an input/output learning problem. However, the labels are generated from a thin-film Reynolds equation solved over the $x$-$y$ footprint and then reconstructed through film thickness, so the physics source is still a reduced thin-film solve. In this supervised setting GeoPT learns a 3D representation of our Reynolds-generated data, not a fully resolved 3D liquid-vapor interface from first principles.
 
 This distinction matters if there is no reliable CFD or experimental interface data. Without real labels, GeoPT can still be trained, but the training target changes: it is no longer a normal supervised surrogate for CFD. It becomes a physics-informed or self-supervised learned solver. The 3D Reynolds data can still be useful as initialization, pretraining, diagnostics, or a weak prior for cavitation-like structures, but the final model would need to learn from physics residuals and constraints rather than from trusted CFD labels.
 
