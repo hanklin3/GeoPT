@@ -1,0 +1,18 @@
+[final_train]
+final_train_loss: 0.47457799315452576
+final_val_loss: 0.5671892166137695
+
+[test]
+test_rel_err: 0.5671892166137695
+test_mse: 0.19197200238704681
+test_mae: 0.28400087356567383
+test_rel_err_split: [inf, inf, 0.17413507401943207, inf, 0.9893431663513184]
+test_rel_err_split_max: [inf, inf, 0.7808760404586792, inf, 17.569175720214844]
+
+[test_full_mesh]
+test_rel_err: 0.564985990524292
+test_mse: 0.191095769405365
+test_mae: 0.28315097093582153
+test_rel_err_split: [inf, inf, 0.17386971414089203, inf, 0.9364171624183655]
+test_rel_err_split_max: [inf, inf, 0.792179524898529, inf, 17.71375846862793]
+

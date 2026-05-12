@@ -5,7 +5,7 @@ from exp.exp_basic import Exp_Basic
 from models.model_factory import get_model
 from data_provider.data_factory import get_data
 from utils.loss import L2Loss
-from utils.visual import visual, visual_reynolds_cavitation_2d_preview
+from utils.visual import visual, visual_reynolds_cavitation_2d_preview, visual_reynolds_cavitation_3d_preview
 import matplotlib.pyplot as plt
 import numpy as np
 import math
@@ -38,6 +38,15 @@ class Exp_Steady(Exp_Basic):
             for key, value in metrics.items():
                 handle.write(f'{key}: {value}\n')
             handle.write('\n')
+
+    def _pointwise_relative_error(self, out, y, eps=1e-8):
+        denom = torch.clamp(torch.abs(y), min=eps)
+        return torch.abs(out - y) / denom
+
+    def _channel_relative_l2(self, out, y, eps=1e-8):
+        error_norm = torch.sqrt(torch.sum((out - y) ** 2, dim=(0, 1)))
+        target_norm = torch.sqrt(torch.sum(y ** 2, dim=(0, 1))).clamp_min(eps)
+        return error_norm / target_norm
 
     def _reynolds2d_constraint_metrics(self, pos_np, field_np, cond_np):
         xs = np.unique(pos_np[:, 0])
@@ -141,10 +150,62 @@ class Exp_Steady(Exp_Basic):
 
         print(f"Saved Reynolds2D metrics report to: {os.path.abspath(report_path)}")
 
+    def _write_reynolds3d_metrics_report(self, output_dir, csv_path, rows):
+        os.makedirs(output_dir, exist_ok=True)
+        report_path = os.path.join(output_dir, 'per_sample_metrics.md')
+        rel_l2 = np.array([row['rel_l2'] for row in rows], dtype=np.float64)
+        channel_names = ['u_velocity', 'v_velocity', 'pressure', 'vapor_fraction', 'density']
+
+        with open(report_path, 'w') as handle:
+            handle.write('# Reynolds3D Per-Sample Metrics\n\n')
+            handle.write(f'- CSV: `{os.path.basename(csv_path)}`\n')
+            handle.write(f'- Samples: {len(rows)}\n')
+            handle.write(f'- Mean relative L2 prediction error: {rel_l2.mean():.6g}\n\n')
+
+            handle.write('## Target Channels\n\n')
+            handle.write('The 3D Reynolds target vector is `[u, v, p, alpha_v, rho]`:\n\n')
+            handle.write('- `u`: sliding-direction velocity\n')
+            handle.write('- `v`: transverse in-plane velocity\n')
+            handle.write('- `p`: pressure after cavitation clipping\n')
+            handle.write('- `alpha_v`: vapor fraction\n')
+            handle.write('- `rho`: liquid-vapor mixture density\n\n')
+
+            handle.write('## Per-Sample Table\n\n')
+            handle.write('| Sample | Points | Rel L2 | MSE | MAE |\n')
+            handle.write('|---:|---:|---:|---:|---:|\n')
+            for row in rows:
+                handle.write(
+                    f"| {row['sample_id']} "
+                    f"| {row['points']} "
+                    f"| {row['rel_l2']:.6g} "
+                    f"| {row['mse']:.6g} "
+                    f"| {row['mae']:.6g} |\n"
+                )
+
+            handle.write('\n## Channel Error Table\n\n')
+            handle.write('| Sample | U Rel L2 | V Rel L2 | Pressure Rel L2 | Vapor Rel L2 | Density Rel L2 |\n')
+            handle.write('|---:|---:|---:|---:|---:|---:|\n')
+            for row in rows:
+                handle.write(
+                    f"| {row['sample_id']} "
+                    f"| {row['u_velocity_rel_l2']:.6g} "
+                    f"| {row['v_velocity_rel_l2']:.6g} "
+                    f"| {row['pressure_rel_l2']:.6g} "
+                    f"| {row['vapor_fraction_rel_l2']:.6g} "
+                    f"| {row['density_rel_l2']:.6g} |\n"
+                )
+
+            handle.write('\n## Mean Channel Errors\n\n')
+            for name in channel_names:
+                values = np.array([row[f'{name}_rel_l2'] for row in rows], dtype=np.float64)
+                handle.write(f'- `{name}` mean relative L2: {values.mean():.6g}\n')
+
+        print(f"Saved Reynolds3D metrics report to: {os.path.abspath(report_path)}")
+
     def _append_per_sample_metrics(self, tag, rows):
         if not self.is_main_process or not rows:
             return
-        if self.args.loader == 'ReynoldsCavitation2D' and tag == 'test_full_mesh':
+        if self.args.loader in ('ReynoldsCavitation2D', 'ReynoldsCavitation3D') and tag == 'test_full_mesh':
             output_dir = os.path.join('./results', self.args.save_name, 'test_full_previews', 'metrics')
         else:
             output_dir = './training_logs'
@@ -158,6 +219,8 @@ class Exp_Steady(Exp_Basic):
         print(f"Saved per-sample metrics to: {os.path.abspath(log_path)}")
         if self.args.loader == 'ReynoldsCavitation2D' and tag == 'test_full_mesh':
             self._write_reynolds2d_metrics_report(output_dir, log_path, rows)
+        if self.args.loader == 'ReynoldsCavitation3D' and tag == 'test_full_mesh':
+            self._write_reynolds3d_metrics_report(output_dir, log_path, rows)
 
     def vali(self):
         myloss = L2Loss(size_average=False)
@@ -316,13 +379,16 @@ class Exp_Steady(Exp_Basic):
                 mse += (out - y).pow(2).mean(dim=1).mean(dim=1).sum().item()
                 mae += torch.abs(out - y).mean(dim=1).mean(dim=1).sum().item()
                 rel_err += tl
-                rel_err_split += torch.mean(torch.mean(torch.abs(out - y) / torch.abs(y), dim=0), dim=0)
-                rel_err_split_max += torch.max(torch.max(torch.abs(out - y) / torch.abs(y), dim=0)[0], dim=0)[0]
+                point_rel = self._pointwise_relative_error(out, y)
+                rel_err_split += self._channel_relative_l2(out, y)
+                rel_err_split_max += torch.max(torch.max(point_rel, dim=0)[0], dim=0)[0]
                 if id < self.args.vis_num:
                     print('visual: ', id)
                     visual(x, y, out, self.args, id)
                     if self.args.loader == 'ReynoldsCavitation2D':
                         visual_reynolds_cavitation_2d_preview(x, fx, y, self.args, id, split='test')
+                    if self.args.loader == 'ReynoldsCavitation3D':
+                        visual_reynolds_cavitation_3d_preview(x, y, out, self.args, id, split='test', cond=cond)
 
         rel_err /= self.args.ntest
         mse /= self.args.ntest
@@ -376,13 +442,16 @@ class Exp_Steady(Exp_Basic):
                 mse += (out - y).pow(2).mean(dim=1).mean(dim=1).sum().item()
                 mae += torch.abs(out - y).mean(dim=1).mean(dim=1).sum().item()
                 rel_err += tl
-                rel_err_split += torch.mean(torch.mean(torch.abs(out - y) / torch.abs(y), dim=0), dim=0)
-                rel_err_split_max += torch.max(torch.max(torch.abs(out - y) / torch.abs(y), dim=0)[0], dim=0)[0]
+                point_rel = self._pointwise_relative_error(out, y)
+                rel_err_split += self._channel_relative_l2(out, y)
+                rel_err_split_max += torch.max(torch.max(point_rel, dim=0)[0], dim=0)[0]
                 if id < self.args.vis_num:
                     print('visual: ', id)
                     visual(x, y, out, self.args, id)
                     if self.args.loader == 'ReynoldsCavitation2D':
                         visual_reynolds_cavitation_2d_preview(x, fx, y, self.args, id, split='test_full')
+                    if self.args.loader == 'ReynoldsCavitation3D':
+                        visual_reynolds_cavitation_3d_preview(x, y, out, self.args, id, split='test_full', cond=cond)
 
                 if self.args.loader == 'ReynoldsCavitation2D':
                     out_np = out.detach().cpu().numpy()
@@ -423,6 +492,32 @@ class Exp_Steady(Exp_Basic):
                         if true_constraint is not None:
                             for key, value in true_constraint.items():
                                 row[f'true_{key}'] = value
+                        per_sample_rows.append(row)
+                    id += batch_size - 1
+                elif self.args.loader == 'ReynoldsCavitation3D':
+                    out_np = out.detach().cpu().numpy()
+                    y_np = y.detach().cpu().numpy()
+                    batch_size = out_np.shape[0]
+                    for batch_idx in range(batch_size):
+                        sample_id = id + batch_idx
+                        err = out_np[batch_idx] - y_np[batch_idx]
+                        channel_mse = np.mean(err ** 2, axis=0)
+                        channel_mae = np.mean(np.abs(err), axis=0)
+                        channel_rel_l2 = np.sqrt(np.sum(err ** 2, axis=0)) / (
+                            np.sqrt(np.sum(y_np[batch_idx] ** 2, axis=0)) + 1e-12
+                        )
+                        row = {
+                            'sample_id': sample_id,
+                            'points': int(out_np.shape[1]),
+                            'rel_l2': float(np.sqrt(np.sum(err ** 2)) / (np.sqrt(np.sum(y_np[batch_idx] ** 2)) + 1e-12)),
+                            'mse': float(np.mean(err ** 2)),
+                            'mae': float(np.mean(np.abs(err))),
+                        }
+                        names = ['u_velocity', 'v_velocity', 'pressure', 'vapor_fraction', 'density']
+                        for channel_idx, name in enumerate(names):
+                            row[f'{name}_mse'] = float(channel_mse[channel_idx])
+                            row[f'{name}_mae'] = float(channel_mae[channel_idx])
+                            row[f'{name}_rel_l2'] = float(channel_rel_l2[channel_idx])
                         per_sample_rows.append(row)
                     id += batch_size - 1
 

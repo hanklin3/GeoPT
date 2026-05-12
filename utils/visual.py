@@ -6,6 +6,7 @@ import shutil
 import tempfile
 import warnings
 from data_preprocess.ReynoldsCavitation2D_process import build_sample, save_diagnostics as reynolds_save_diagnostics
+from data_preprocess.ReynoldsCavitation3D_process import save_diagnostics as reynolds3d_save_diagnostics
 
 warnings.filterwarnings('ignore')
 
@@ -232,3 +233,98 @@ def visual_reynolds_cavitation_2d_preview(pos, fx, y, args, id, split='test'):
     meta['shear'] = shear_pred
 
     _save_reynolds_diagnostics_flat(save_dir, split, id, meta)
+
+
+def _infer_reynolds3d_grid(pos_np):
+    xs = np.unique(pos_np[:, 0])
+    ys = np.unique(pos_np[:, 1])
+    nx, ny = len(xs), len(ys)
+    if nx == 0 or ny == 0 or pos_np.shape[0] % (nx * ny) != 0:
+        return None
+    nz = pos_np.shape[0] // (nx * ny)
+    if nx * ny * nz != pos_np.shape[0]:
+        return None
+    return xs, ys, nx, ny, nz
+
+
+def _reynolds3d_meta_from_field(pos_np, field_np, cond_np=None):
+    grid = _infer_reynolds3d_grid(pos_np)
+    if grid is None:
+        return None
+    xs, ys, nx, ny, nz = grid
+    coords = pos_np.reshape(nx, ny, nz, 3)
+    field = field_np.reshape(nx, ny, nz, -1)
+    xx, yy = np.meshgrid(xs, ys, indexing='ij')
+    eta = np.linspace(0.0, 1.0, nz)
+
+    bottom = coords[:, :, 0, 2]
+    top = coords[:, :, -1, 2]
+    h = np.maximum(top - bottom, 1e-6)
+    u = field[:, :, :, 0]
+    v = field[:, :, :, 1]
+    p3 = field[:, :, :, 2]
+    alpha3 = np.clip(field[:, :, :, 3], 0.0, 1.0)
+    rho3 = field[:, :, :, 4]
+    speed = np.sqrt(u ** 2 + v ** 2)
+
+    if cond_np is None:
+        cond_flat = np.zeros(5, dtype=np.float64)
+    else:
+        cond_flat = np.asarray(cond_np).reshape(-1)
+    surface_flag = int(round(float(cond_flat[0]))) if cond_flat.size > 0 else 1
+    wall_speed_x = float(cond_flat[1]) if cond_flat.size > 1 else 1.0
+    wall_speed_y = 0.0
+    viscosity = float(cond_flat[2]) if cond_flat.size > 2 else 0.05
+
+    p_mid = p3[:, :, nz // 2]
+    alpha_2d = np.max(alpha3, axis=2)
+    rho_2d = np.mean(rho3, axis=2)
+    du_deta = np.gradient(u, eta, axis=2, edge_order=2)
+    dv_deta = np.gradient(v, eta, axis=2, edge_order=2)
+    shear = np.sqrt(du_deta ** 2 + dv_deta ** 2) / h[:, :, None]
+
+    return {
+        "x": xs,
+        "y": ys,
+        "z": eta,
+        "xx": xx,
+        "yy": yy,
+        "h": h,
+        "top": top,
+        "bottom": bottom,
+        "surface_flag": surface_flag,
+        "wall_speed_x": wall_speed_x,
+        "wall_speed_y": wall_speed_y,
+        "viscosity": viscosity,
+        "vapor_pressure": float(np.nanmin(p_mid)),
+        "p_raw": p_mid,
+        "p_reynolds_raw": p_mid,
+        "p": p_mid,
+        "alpha": alpha_2d,
+        "alpha3": alpha3,
+        "rho": rho_2d,
+        "rho3": rho3,
+        "u": u,
+        "v": v,
+        "speed": speed,
+        "shear": shear,
+    }
+
+
+def visual_reynolds_cavitation_3d_preview(pos, y, out, args, id, split='test', cond=None):
+    """Save Reynolds3D diagnostics using the same plotter as dataset generation."""
+    output_root = os.path.join('./results', args.save_name, f'{split}_previews')
+    os.makedirs(output_root, exist_ok=True)
+    if id == 1:
+        print(f"Saving Reynolds3D preview plots to: {os.path.abspath(output_root)}")
+
+    pos_np = pos[0].detach().cpu().numpy()
+    y_np = y[0].detach().cpu().numpy()
+    out_np = out[0].detach().cpu().numpy()
+    cond_np = cond[0].detach().cpu().numpy() if cond is not None else None
+    true_meta = _reynolds3d_meta_from_field(pos_np, y_np, cond_np)
+    pred_meta = _reynolds3d_meta_from_field(pos_np, out_np, cond_np)
+    if true_meta is None or pred_meta is None:
+        return
+    reynolds3d_save_diagnostics(output_root, 'truth', id, true_meta)
+    reynolds3d_save_diagnostics(output_root, 'prediction', id, pred_meta)

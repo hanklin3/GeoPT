@@ -1,0 +1,28 @@
+# Python caches
+__pycache__/
+
+# Local environments and editor files
+.env
+.venv/
+venv/
+.vscode/
+.idea/
+
+# Training artifacts
+checkpoints/
+# results/
+# training_logs/
+
+# Generated datasets and previews
+# data/reynolds_cavitation_3d_npys/
+# data/reynolds_cavitation_3d_preview/
+# data/reynolds_cavitation_2d_preview/
+reynolds_cavitation_npys/
+reynolds_cavitation_preview/
+reynolds_cavitation_middle_pore_preview/
+poiseuille_cavitation_npys/
+poiseuille_multiphase_preview/
+car_crash_npys/
+
+# Local papers and large ad-hoc artifacts
+*.pdf

@@ -1,4 +1,4 @@
-from data_provider.data_loader import DrivAerML, NASA, AirCraft, DTCHull, Car_Crash, ReynoldsCavitation, ReynoldsCavitation2D, PoiseuilleMultiphase
+from data_provider.data_loader import DrivAerML, NASA, AirCraft, DTCHull, Car_Crash, ReynoldsCavitation, ReynoldsCavitation2D, ReynoldsCavitation3D, PoiseuilleMultiphase
 
 
 def get_data(args, full_mesh=False):
@@ -10,6 +10,7 @@ def get_data(args, full_mesh=False):
         'Car_Crash': Car_Crash,
         'ReynoldsCavitation': ReynoldsCavitation,
         'ReynoldsCavitation2D': ReynoldsCavitation2D,
+        'ReynoldsCavitation3D': ReynoldsCavitation3D,
         'PoiseuilleMultiphase': PoiseuilleMultiphase,
     }
     dataset = data_dict[args.loader](args)

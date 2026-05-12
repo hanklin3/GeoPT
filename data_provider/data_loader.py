@@ -438,3 +438,4 @@ class ReynoldsCavitation(object):
 
 PoiseuilleMultiphase = ReynoldsCavitation
 ReynoldsCavitation2D = ReynoldsCavitation
+ReynoldsCavitation3D = ReynoldsCavitation
